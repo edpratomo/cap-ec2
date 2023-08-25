@@ -10,6 +10,10 @@ module CapEC2
       end
     end
 
+    def role_arn
+      fetch(:ec2_role_arn)
+    end
+
     def project_tag
       fetch(:ec2_project_tag)
     end
@@ -56,7 +60,7 @@ module CapEC2
 
       config_location = File.expand_path(fetch(:ec2_config), Dir.pwd) if fetch(:ec2_config)
       if config_location && File.exists?(config_location)
-        config = YAML.load(ERB.new(File.read(fetch(:ec2_config))))
+        config = YAML.load(ERB.new(File.read(fetch(:ec2_config))).result)
         if config
           set :ec2_project_tag, config['project_tag'] if config['project_tag']
           set :ec2_roles_tag, config['roles_tag'] if config['roles_tag']
@@ -68,6 +72,7 @@ module CapEC2
           set :ec2_region, config['regions'] if config['regions']
 
           set :ec2_filter_by_status_ok?, config['filter_by_status_ok?'] if config['filter_by_status_ok?']
+          set :ec2_role_arn, config['role_arn'] if config['role_arn']
         end
       end
     end

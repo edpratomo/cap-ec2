@@ -1,4 +1,5 @@
-require 'aws-sdk'
+require 'aws-sdk-iam'
+require 'aws-sdk-ec2'
 
 module CapEC2
   class EC2Handler
@@ -13,12 +14,28 @@ module CapEC2
       end
     end
 
-    def ec2_connect(region=nil)
-      Aws::EC2::Client.new(
-        access_key_id: fetch(:ec2_access_key_id),
-        secret_access_key: fetch(:ec2_secret_access_key),
-        region: region
+    def ec2_connect_by_role_arn(role_arn, region=nil)
+      credentials = Aws::InstanceProfileCredentials.new(http_debug_output: $stdout)
+      sts_client = Aws::STS::Client.new(region: region, credentials: credentials, http_wire_trace: false)
+      temp_credentials = Aws::AssumeRoleCredentials.new(
+        client: sts_client,
+        role_arn: role_arn,
+        role_session_name: "create-use-assume-role"
       )
+      ec2_client = Aws::EC2::Client.new(credentials: temp_credentials, region: region)
+    end
+
+    def ec2_connect(region=nil)
+      ec2_client = if fetch(:ec2_role_arn)
+        ec2_connect_by_role_arn(fetch(:ec2_role_arn), region)
+      else
+        Aws::EC2::Client.new(
+          access_key_id: fetch(:ec2_access_key_id),
+          secret_access_key: fetch(:ec2_secret_access_key),
+          region: region
+        )
+      end
+      ec2_resource = Aws::EC2::Resource.new(client: ec2_client)
     end
 
     def status_table
@@ -68,7 +85,8 @@ module CapEC2
 
       servers = []
       @ec2.each do |_, ec2|
-        ec2.describe_instances(filters: filters).reservations.each do |r|
+        ec2_client = ec2.client
+        ec2_client.describe_instances(filters: filters).reservations.each do |r|
           servers += r.instances.select do |i|
               instance_has_tag?(i, roles_tag, role) &&
                 instance_has_tag?(i, stages_tag, stage) &&
@@ -90,12 +108,16 @@ module CapEC2
     private
 
     def instance_has_tag?(instance, key, value)
-      (tag_value(instance, key) || '').split(tag_delimiter).map(&:strip).include?(value.to_s)
+      # (tag_value(instance, key) || '').split(tag_delimiter).map(&:strip).include?(value.to_s)
+      found_tag = instance.tags.find { |it| it.key == key.to_s }
+      if found_tag
+        found_tag.value.split(',').map(&:strip).include?(value.to_s)
+      end
     end
 
     def instance_status_ok?(instance)
       @ec2.any? do |_, ec2|
-        ec2.describe_instance_status(
+        ec2.client.describe_instance_status(
           instance_ids: [instance.instance_id],
           filters: [{ name: 'instance-status.status', values: %w(ok) }]
         ).instance_statuses.length == 1
